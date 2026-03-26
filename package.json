@@ -1,0 +1,12 @@
+{
+  "name": "pharma-chain",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently --kill-others-on-fail -n chain,deploy,frontend -c blue,green,magenta \"if lsof -ti tcp:8545 >/dev/null 2>&1; then echo '[chain] Reusing existing service on 8545'; else cd blockchain && node node_modules/hardhat/internal/cli/bootstrap.js node; fi\" \"wait-on tcp:127.0.0.1:8545 && cd blockchain && node node_modules/hardhat/internal/cli/bootstrap.js run scripts/deploy.js --network localhost\" \"if lsof -ti tcp:5173 >/dev/null 2>&1; then echo '[frontend] Reusing existing service on 5173'; else wait-on tcp:127.0.0.1:8545 && pnpm --dir frontend run dev -- --host 127.0.0.1; fi\"",
+    "dev:npm": "concurrently --kill-others-on-fail -n chain,deploy,frontend -c blue,green,magenta \"if lsof -ti tcp:8545 >/dev/null 2>&1; then echo '[chain] Reusing existing service on 8545'; else cd blockchain && node node_modules/hardhat/internal/cli/bootstrap.js node; fi\" \"wait-on tcp:127.0.0.1:8545 && cd blockchain && node node_modules/hardhat/internal/cli/bootstrap.js run scripts/deploy.js --network localhost\" \"if lsof -ti tcp:5173 >/dev/null 2>&1; then echo '[frontend] Reusing existing service on 5173'; else wait-on tcp:127.0.0.1:8545 && npm --prefix frontend run dev -- --host 127.0.0.1; fi\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "wait-on": "^8.0.5"
+  }
+}
