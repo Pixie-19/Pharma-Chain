@@ -128,19 +128,36 @@ Important:
 
 ## ▶️ Run The Entire Project Locally
 
-You need **three terminals** for the full local workflow.
+You need **three terminals**. Run them in order.
+
+### Quick Reference
+
+**Terminal 1** — Start the local blockchain:
+```bash
+cd blockchain && nvm use 20 && npx hardhat node
+```
+
+**Terminal 2** — Deploy the contract + fund your wallet (run after Terminal 1 is ready):
+```bash
+cd blockchain && nvm use 20 && npx hardhat run scripts/deploy.js --network localhost && npx hardhat run scripts/fund.js --network localhost
+```
+
+**Terminal 3** — Start the frontend:
+```bash
+cd frontend && npm run dev
+```
+
+Then open `http://localhost:5173` and hard refresh with `Cmd+Shift+R`.
+
+> **Note:** Re-run Terminal 2 every time you restart the Hardhat node — the chain resets and the contract + wallet balance must be re-created.
+
+---
 
 ### Terminal 1: Start Hardhat Local Blockchain
 
 ```bash
 cd blockchain
-pnpm exec hardhat node
-```
-
-Or with npm:
-
-```bash
-cd blockchain
+nvm use 20
 npx hardhat node
 ```
 

@@ -93,6 +93,7 @@ export default function App() {
   useEffect(() => {
     const handleAnnounce = (event) => {
       const { info, provider } = event.detail;
+      if (eip6963Map.current.has(info.uuid)) return; // already known — skip to prevent re-render loop
       eip6963Map.current.set(info.uuid, {
         id: info.rdns ?? info.uuid,
         label: info.name,
