@@ -1,14 +1,40 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useEffectEvent, useRef } from "react";
 import { ethers } from "ethers";
 import { Wallet, ShieldCheck, Settings, ArrowRight, CheckCircle2, User, Building2, Search, ArrowLeft, Pill, QrCode, X } from "lucide-react";
-import { QRCodeSVG } from "qrcode.react";
 import { Html5QrcodeScanner } from "html5-qrcode";
 import config from "./config.json";
+
 const contractAddress = config.contractAddress;
 const contractABI = config.abi;
+const WALLET_STORAGE_KEY = "pharmachain.wallet";
 
 const ROLES = { 0: "None", 1: "Manufacturer", 2: "Distributor", 3: "Retailer / Healthcare Provider" };
 const STATUS = { 0: "Manufactured", 1: "In Transit", 2: "Delivered" };
+
+// ── Wallet detection via EIP-6963 + legacy fallback ────────────────────────
+const getLegacyWalletOptions = () => {
+  if (typeof window === "undefined") return [];
+
+  const seen = new Set();
+  const options = [];
+
+  const addProvider = (provider) => {
+    if (!provider || seen.has(provider)) return;
+    seen.add(provider);
+    const id = provider.isMetaMask ? "metamask" : `wallet-${seen.size}`;
+    const label = provider.isMetaMask ? "MetaMask" : "Wallet";
+    options.push({ id, label, icon: null, provider });
+  };
+
+  const root = window.ethereum;
+  if (Array.isArray(root?.providers)) {
+    root.providers.forEach(addProvider);
+  } else {
+    addProvider(root);
+  }
+
+  return options;
+};
 
 // Sub-component for QR Scanner using html5-qrcode
 const QRScannerPlugin = ({ onScanSuccess, onScanFailure }) => {
@@ -23,16 +49,21 @@ const QRScannerPlugin = ({ onScanSuccess, onScanFailure }) => {
     return () => {
       scanner.clear().catch(e => console.error("Failed to clear scanner", e));
     };
-  }, []);
+  }, [onScanFailure, onScanSuccess]);
   return <div id="qr-reader" className="w-full max-w-sm mx-auto overflow-hidden rounded-xl border-2 border-slate-700"></div>;
 };
 
 export default function App() {
   const [view, setView] = useState("landing");
-  const [provider, setProvider] = useState(null);
+  const [, setProvider] = useState(null);
   const [account, setAccount] = useState("");
   const [contract, setContract] = useState(null);
   const [role, setRole] = useState(0);
+  const [walletName, setWalletName] = useState("Wallet");
+  const [selectedWalletId, setSelectedWalletId] = useState(() => {
+    if (typeof window === "undefined") return null;
+    return window.localStorage.getItem(WALLET_STORAGE_KEY);
+  });
 
   // Forms mapping
   const [batchName, setBatchName] = useState("");
@@ -52,66 +83,165 @@ export default function App() {
   const [mintedBatchId, setMintedBatchId] = useState(null);
   const [showScanner, setShowScanner] = useState(false);
   const [scanTarget, setScanTarget] = useState(""); // "verify" or "transfer"
-  const [hasScannedParam, setHasScannedParam] = useState(false);
+  const [showWalletPicker, setShowWalletPicker] = useState(false);
+
+  // EIP-6963: modern wallet discovery (MetaMask, Coinbase, etc.)
+  const [eip6963Wallets, setEip6963Wallets] = useState([]);
+  const eip6963Map = useRef(new Map());
+  const connectingRef = useRef(false);
+
+  useEffect(() => {
+    const handleAnnounce = (event) => {
+      const { info, provider } = event.detail;
+      eip6963Map.current.set(info.uuid, {
+        id: info.rdns ?? info.uuid,
+        label: info.name,
+        icon: info.icon ?? null,
+        provider,
+      });
+      setEip6963Wallets([...eip6963Map.current.values()]);
+    };
+    window.addEventListener("eip6963:announceProvider", handleAnnounce);
+    window.dispatchEvent(new Event("eip6963:requestProvider"));
+    return () => window.removeEventListener("eip6963:announceProvider", handleAnnounce);
+  }, []);
+
+  const runCheckConnection = useEffectEvent(() => {
+    checkConnection();
+  });
+
+  const runBatchVerification = useEffectEvent((batchId) => {
+    verifyBatchId(batchId);
+  });
+
+  const runHandleProviderChange = useEffectEvent(async () => {
+    if (connectingRef.current) return;
+    connectingRef.current = true;
+    try {
+      setProvider(null);
+      setContract(null);
+      setAccount("");
+      setRole(0);
+      await checkConnection();
+    } finally {
+      connectingRef.current = false;
+    }
+  });
 
   // Initial load check for query parameters ?batch=...
   useEffect(() => {
-    checkConnection();
-    
-    if (window.ethereum) {
-      window.ethereum.on('chainChanged', () => {
-        window.location.reload();
-      });
-      window.ethereum.on('accountsChanged', () => {
-        window.location.reload();
-      });
-    }
+    // Resolve the active provider from EIP-6963 announcements + legacy fallback
+    const allOptions = [
+      ...eip6963Wallets,
+      ...getLegacyWalletOptions().filter(
+        (leg) => !eip6963Wallets.some((w) => w.provider === leg.provider)
+      ),
+    ];
+    const activeWallet = selectedWalletId
+      ? allOptions.find((w) => w.id === selectedWalletId) ?? allOptions[0]
+      : allOptions[0];
+    const injectedProvider = activeWallet?.provider ?? null;
+
+    runCheckConnection();
+
+    injectedProvider?.on?.("chainChanged", runHandleProviderChange);
+    injectedProvider?.on?.("accountsChanged", runHandleProviderChange);
 
     // Auto-Verify if a parameter is present (e.g. they scanned a QR code pointing to localhost/?batch=xyz)
     const urlParams = new URLSearchParams(window.location.search);
     const batchFromUrl = urlParams.get('batch');
     
-    if (batchFromUrl && !hasScannedParam) {
-      setHasScannedParam(true); // Ensure we only trigger this once
+    if (batchFromUrl) {
       setView("customer");
       setVerifyId(batchFromUrl);
       // Wait a moment for rendering, then run verification
-      setTimeout(() => verifyBatchId(batchFromUrl), 1000); 
+      setTimeout(() => runBatchVerification(batchFromUrl), 1000);
     }
-  }, [view]);
+
+    return () => {
+      injectedProvider?.removeListener?.("chainChanged", runHandleProviderChange);
+      injectedProvider?.removeListener?.("accountsChanged", runHandleProviderChange);
+    };
+  }, [selectedWalletId, eip6963Wallets]);
 
   const checkConnection = async () => {
-    if (window.ethereum) {
+    // Don't auto-connect if the user explicitly signed out (no stored preference)
+    if (typeof window !== "undefined" && !window.localStorage.getItem(WALLET_STORAGE_KEY)) {
+      return;
+    }
+
+    // Try to find the previously used wallet by stored id
+    const storedId = selectedWalletId;
+
+    // Build a merged candidates list: EIP-6963 first, then legacy
+    const allOptions = [
+      ...eip6963Wallets,
+      ...getLegacyWalletOptions().filter(
+        (leg) => !eip6963Wallets.some((w) => w.provider === leg.provider)
+      ),
+    ];
+
+    const preferred = storedId
+      ? allOptions.find((w) => w.id === storedId) ?? allOptions[0]
+      : allOptions[0];
+
+    const candidates = preferred ? [preferred, ...allOptions.filter((w) => w !== preferred)] : allOptions;
+
+    for (const wallet of candidates) {
       try {
-        const accounts = await window.ethereum.request({ method: "eth_accounts" });
-        if (accounts.length > 0) connectWallet();
+        const accounts = await wallet.provider.request({ method: "eth_accounts" });
+        if (accounts.length > 0) {
+          setWalletName(wallet.label);
+          await connectWallet({ silent: true, injectedProvider: wallet.provider, preferredWallet: wallet.id, walletLabel: wallet.label });
+          return;
+        }
       } catch (err) {
         console.error(err);
       }
     }
   };
 
-  const connectWallet = async () => {
-    if (!window.ethereum) return alert("Please install MetaMask.");
+  const connectWallet = async ({ silent = false, injectedProvider, preferredWallet, walletLabel } = {}) => {
+    // Resolve provider: prefer passed-in, then stored-id lookup, then first available
+    if (!injectedProvider) {
+      const allOptions = [
+        ...eip6963Wallets,
+        ...getLegacyWalletOptions().filter(
+          (leg) => !eip6963Wallets.some((w) => w.provider === leg.provider)
+        ),
+      ];
+      const found = preferredWallet
+        ? allOptions.find((w) => w.id === preferredWallet)
+        : allOptions[0];
+      injectedProvider = found?.provider ?? null;
+      walletLabel = walletLabel ?? found?.label ?? "Wallet";
+    }
+    if (!injectedProvider) return alert("Please install an EVM wallet such as MetaMask.");
+
+    const connectedWalletName = walletLabel ?? "Wallet";
+    const walletId = preferredWallet ?? "wallet";
+
     try {
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      
-      // Prevent user from connecting to wrong network
-      const network = await provider.getNetwork();
-      if (network.chainId !== 11155111n) {
-        alert("🚨 WRONG NETWORK SELECTED IN METAMASK!\n\nYou must switch to 'Sepolia' (Chain ID: 11155111).\n\nPlease switch your MetaMask network to Sepolia to interact with PharmaChain!");
+      const accounts = await injectedProvider.request({
+        method: silent ? "eth_accounts" : "eth_requestAccounts",
+      });
+
+      if (!accounts.length) {
         return;
       }
 
-      const signer = await provider.getSigner();
+      setSelectedWalletId(walletId);
+      if (typeof window !== "undefined" && walletId) {
+        window.localStorage.setItem(WALLET_STORAGE_KEY, walletId);
+      }
+      setWalletName(connectedWalletName);
+
+      const provider = new ethers.BrowserProvider(injectedProvider);
+      const network = await provider.getNetwork();
+
+      const signer = await provider.getSigner(accounts[0]);
       const addr = await signer.getAddress();
       
-      const code = await provider.getCode(contractAddress);
-      if (code === "0x") {
-        alert(`🚨 CONTRACT NOT DEPLOYED!\n\nYour UI is pointing to ${contractAddress} but there is NO smart contract at this address on Sepolia.\n\nYou need to add your PRIVATE_KEY to the .env file and run:\nnpx hardhat run scripts/deploy.js --network sepolia\n\nThen refresh the page!`);
-        return;
-      }
-
       setProvider(provider);
       setAccount(addr);
       
@@ -121,11 +251,50 @@ export default function App() {
       try {
         const r = await pContract.getMyRole();
         setRole(Number(r));
-      } catch (e) {
+      } catch {
         console.log("No role assigned");
       }
     } catch (err) {
+      setProvider(null);
+      setAccount("");
+      setContract(null);
+      setRole(0);
       console.error(err);
+      if (!silent && err.code !== 4001) {
+        alert(err.shortMessage || err.message || "Wallet connection failed.");
+      }
+    }
+  };
+
+  const signOut = async () => {
+
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(WALLET_STORAGE_KEY);
+    }
+
+    setSelectedWalletId(null);
+    setProvider(null);
+    setAccount("");
+    setContract(null);
+    setRole(0);
+    setWalletName("Wallet");
+    setView("landing");
+  };
+
+  const walletOptions = [
+    ...eip6963Wallets.filter((w) => !w.id.includes("phantom")),
+    ...getLegacyWalletOptions().filter(
+      (leg) => !eip6963Wallets.some((w) => w.provider === leg.provider)
+    ),
+  ];
+
+  const openWalletPicker = () => {
+    if (walletOptions.length === 1) {
+      connectWallet({ injectedProvider: walletOptions[0].provider, preferredWallet: walletOptions[0].id, walletLabel: walletOptions[0].label });
+    } else if (walletOptions.length === 0) {
+      connectWallet();
+    } else {
+      setShowWalletPicker(true);
     }
   };
 
@@ -156,11 +325,7 @@ export default function App() {
       setBatchName(""); setExpiry(""); setLocation("");
     } catch (err) {
       console.error(err);
-      if (err.message && err.message.includes("Internal error")) {
-        alert("Transaction Failed! ❌\n\nIt looks like you are trying to send a transaction to the wrong blockchain or contract. Please ensure MetaMask is on Sepolia.");
-      } else {
-        alert("Error creating batch. Check console for details.");
-      }
+      alert(err.code === 4001 ? "Transaction cancelled." : "Error creating batch. Check console for details.");
     }
   };
 
@@ -174,11 +339,7 @@ export default function App() {
       setTransferId(""); setTransferTo(""); setTransferLoc("");
     } catch (err) {
       console.error(err);
-      if (err.message && err.message.includes("Internal error")) {
-        alert("Transaction Failed! ❌\n\nPlease ensure MetaMask is connected to Sepolia.");
-      } else {
-        alert("Error transferring batch. Verify you are the current owner.");
-      }
+      alert(err.code === 4001 ? "Transaction cancelled." : "Error transferring batch. Verify you are the current owner.");
     }
   };
 
@@ -188,7 +349,7 @@ export default function App() {
     // Fallback to a read-only provider if wallet isn't connected (for Customers)
     let readContract = contract;
     if (!readContract) {
-      const readProvider = new ethers.JsonRpcProvider("https://rpc.sepolia.org");
+      const readProvider = new ethers.JsonRpcProvider("https://ethereum-sepolia-rpc.publicnode.com");
       readContract = new ethers.Contract(contractAddress, contractABI, readProvider);
     }
 
@@ -276,6 +437,38 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans pb-20 relative">
       
+      {/* WALLET PICKER MODAL */}
+      {showWalletPicker && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setShowWalletPicker(false)}>
+          <div className="bg-white rounded-3xl shadow-2xl p-8 w-full max-w-sm relative" onClick={(e) => e.stopPropagation()}>
+            <button onClick={() => setShowWalletPicker(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-800 bg-slate-100 rounded-full p-2 transition-colors">
+              <X className="w-5 h-5" />
+            </button>
+            <h3 className="text-xl font-bold text-slate-800 mb-2 text-center">Connect Wallet</h3>
+            <p className="text-sm text-slate-500 text-center mb-6">Choose a wallet to connect to PharmaChain.</p>
+            <div className="flex flex-col gap-3">
+              {walletOptions.map((wallet) => (
+                <button
+                  key={wallet.id}
+                  onClick={() => { connectWallet({ injectedProvider: wallet.provider, preferredWallet: wallet.id, walletLabel: wallet.label }); setShowWalletPicker(false); }}
+                  className="flex items-center gap-4 w-full rounded-2xl border-2 border-slate-200 hover:border-blue-500 bg-white hover:bg-blue-50 px-5 py-4 transition-all group"
+                >
+                  <div className="w-10 h-10 rounded-xl bg-slate-100 group-hover:bg-blue-100 flex items-center justify-center flex-shrink-0 transition-colors overflow-hidden">
+                    {wallet.icon
+                      ? <img src={wallet.icon} alt={wallet.label} className="w-7 h-7 object-contain" />
+                      : <Wallet className="w-5 h-5 text-slate-600 group-hover:text-blue-600" />}
+                  </div>
+                  <div className="text-left">
+                    <p className="font-semibold text-slate-800">{wallet.label}</p>
+                    <p className="text-xs text-slate-400">Connect using {wallet.label}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* SCANNER MODAL OVERLAY */}
       {showScanner && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
@@ -346,13 +539,23 @@ export default function App() {
           </div>
         </div>
         {view === "industry" && (
-          <button
-            onClick={connectWallet}
-            className="flex items-center gap-2 bg-slate-900 hover:bg-slate-800 text-white px-5 py-2.5 rounded-full font-medium transition-all shadow-md active:scale-95"
-          >
-            <Wallet className="w-4 h-4" />
-            {account ? `${account.slice(0, 6)}...${account.slice(-4)}` : "Connect Wallet"}
-          </button>
+          <div className="flex items-center gap-3">
+            {account && (
+              <button
+                onClick={signOut}
+                className="border border-slate-300 hover:border-slate-400 bg-white hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-full font-medium transition-all"
+              >
+                Sign Out
+              </button>
+            )}
+            <button
+              onClick={account ? undefined : openWalletPicker}
+              className="flex items-center gap-2 bg-slate-900 hover:bg-slate-800 text-white px-5 py-2.5 rounded-full font-medium transition-all shadow-md active:scale-95"
+            >
+              <Wallet className="w-4 h-4" />
+              {account ? `${account.slice(0, 6)}...${account.slice(-4)}` : "Connect Wallet"}
+            </button>
+          </div>
         )}
       </header>
 
@@ -365,11 +568,35 @@ export default function App() {
                 <Wallet className="w-16 h-16 text-slate-300 mb-6" />
                 <h2 className="text-2xl font-bold text-slate-800 mb-2">Connect Your Web3 Wallet</h2>
                 <p className="text-slate-500 max-w-md mb-8">
-                  You must connect MetaMask to access the industry portal and interact with the supply chain contract.
+                  Connect an EVM wallet such as MetaMask to access the industry portal and interact with the supply chain contract.
                 </p>
-                <button onClick={connectWallet} className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-8 rounded-full shadow-lg shadow-blue-500/30 transition-all flex items-center gap-2 text-lg">
-                  Connect MetaMask <ArrowRight className="w-5 h-5"/>
-                </button>
+                <div className="flex w-full max-w-sm flex-col gap-3">
+                  {walletOptions.length > 0 ? walletOptions.map((wallet) => (
+                    <button
+                      key={wallet.id}
+                      onClick={() => connectWallet({ injectedProvider: wallet.provider, preferredWallet: wallet.id, walletLabel: wallet.label })}
+                      className="flex items-center gap-4 w-full rounded-2xl border-2 border-slate-200 hover:border-blue-500 bg-white hover:bg-blue-50 px-5 py-4 transition-all group"
+                    >
+                      <div className="w-10 h-10 rounded-xl bg-slate-100 group-hover:bg-blue-100 flex items-center justify-center flex-shrink-0 transition-colors overflow-hidden">
+                        {wallet.icon
+                          ? <img src={wallet.icon} alt={wallet.label} className="w-7 h-7 object-contain" />
+                          : <Wallet className="w-5 h-5 text-slate-600 group-hover:text-blue-600" />}
+                      </div>
+                      <div className="text-left">
+                        <p className="font-semibold text-slate-800">{wallet.label}</p>
+                        <p className="text-xs text-slate-400">Connect using {wallet.label}</p>
+                      </div>
+                    </button>
+                  )) : (
+                    <button onClick={() => connectWallet()} className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-8 rounded-full shadow-lg shadow-blue-500/30 transition-all flex items-center justify-center gap-2 text-lg">
+                      <Wallet className="w-5 h-5" />
+                      Connect Wallet
+                    </button>
+                  )}
+                  <p className="text-sm text-slate-400 text-center mt-2">
+                    {walletOptions.length > 1 ? "Choose the wallet for this session. Sign out any time to switch." : "Install MetaMask if no options appear."}
+                  </p>
+                </div>
               </div>
             ) : (
               <>
@@ -387,6 +614,12 @@ export default function App() {
                   <div className="bg-slate-900/40 border border-white/10 rounded-xl px-5 py-3 text-sm font-mono text-blue-100 flex items-center gap-2 break-all bg-opacity-50">
                     <Wallet className="w-4 h-4 text-blue-300"/> {account}
                   </div>
+                  <button
+                    onClick={signOut}
+                    className="mt-4 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white transition-all hover:bg-white/20 md:mt-0"
+                  >
+                    Sign Out From {walletName}
+                  </button>
                 </div>
 
                 {role === 0 && (
