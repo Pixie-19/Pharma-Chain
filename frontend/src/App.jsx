@@ -105,6 +105,13 @@ export default function App() {
 
       const signer = await provider.getSigner();
       const addr = await signer.getAddress();
+      
+      const code = await provider.getCode(contractAddress);
+      if (code === "0x") {
+        alert(`🚨 CONTRACT NOT DEPLOYED!\n\nYour UI is pointing to ${contractAddress} but there is NO smart contract at this address on Sepolia.\n\nYou need to add your PRIVATE_KEY to the .env file and run:\nnpx hardhat run scripts/deploy.js --network sepolia\n\nThen refresh the page!`);
+        return;
+      }
+
       setProvider(provider);
       setAccount(addr);
       
