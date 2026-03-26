@@ -103,10 +103,10 @@ export default function App() {
     try {
       const provider = new ethers.BrowserProvider(window.ethereum);
       
-      // Prevent user from connecting to wrong network (e.g. Sepolia)
+      // Prevent user from connecting to wrong network
       const network = await provider.getNetwork();
-      if (network.chainId !== 31337n) {
-        alert("🚨 WRONG NETWORK SELECTED IN METAMASK!\n\nYou must switch to 'Localhost 8545' (Chain ID: 31337).\n\nThe red SCAM warning happens because you are on Sepolia using a local test address. Please switch your MetaMask network to Localhost to fix this!");
+      if (network.chainId !== 11155111n) {
+        alert("🚨 WRONG NETWORK SELECTED IN METAMASK!\n\nYou must switch to 'Sepolia' (Chain ID: 11155111).\n\nPlease switch your MetaMask network to Sepolia to interact with PharmaChain!");
         return;
       }
 
@@ -157,7 +157,7 @@ export default function App() {
     } catch (err) {
       console.error(err);
       if (err.message && err.message.includes("Internal error")) {
-        alert("Transaction Failed! ❌\n\nIt looks like you are trying to send a transaction to the wrong blockchain. Please ensure MetaMask is set to 'Localhost 8545' and NOT Sepolia.");
+        alert("Transaction Failed! ❌\n\nIt looks like you are trying to send a transaction to the wrong blockchain or contract. Please ensure MetaMask is on Sepolia.");
       } else {
         alert("Error creating batch. Check console for details.");
       }
@@ -175,7 +175,7 @@ export default function App() {
     } catch (err) {
       console.error(err);
       if (err.message && err.message.includes("Internal error")) {
-        alert("Transaction Failed! ❌\n\nPlease ensure MetaMask is connected to Localhost instead of Sepolia.");
+        alert("Transaction Failed! ❌\n\nPlease ensure MetaMask is connected to Sepolia.");
       } else {
         alert("Error transferring batch. Verify you are the current owner.");
       }
@@ -188,7 +188,7 @@ export default function App() {
     // Fallback to a read-only provider if wallet isn't connected (for Customers)
     let readContract = contract;
     if (!readContract) {
-      const readProvider = new ethers.JsonRpcProvider("http://127.0.0.1:8545/");
+      const readProvider = new ethers.JsonRpcProvider("https://rpc.sepolia.org");
       readContract = new ethers.Contract(contractAddress, contractABI, readProvider);
     }
 
