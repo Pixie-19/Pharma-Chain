@@ -1,6 +1,6 @@
 import { useState, useEffect, useEffectEvent, useRef } from "react";
 import { ethers } from "ethers";
-import { Wallet, ShieldCheck, Settings, ArrowRight, CheckCircle2, User, Building2, Search, ArrowLeft, Pill, QrCode, X } from "lucide-react";
+import { Wallet, ShieldCheck, Settings, ArrowRight, CheckCircle2, User, Building2, Search, ArrowLeft, Pill, QrCode, X, AlertTriangle, ShieldAlert } from "lucide-react";
 import { Html5QrcodeScanner } from "html5-qrcode";
 import config from "./config.json";
 
@@ -9,7 +9,7 @@ const contractABI = config.abi;
 const WALLET_STORAGE_KEY = "pharmachain.wallet";
 
 const ROLES = { 0: "None", 1: "Manufacturer", 2: "Distributor", 3: "Retailer / Healthcare Provider" };
-const STATUS = { 0: "Manufactured", 1: "In Transit", 2: "Delivered" };
+const STATUS = { 0: "Manufactured", 1: "In Transit", 2: "Delivered", 3: "Recalled", 4: "Sold", 5: "Lost", 6: "Rejected" };
 
 // ── Wallet detection via EIP-6963 + legacy fallback ────────────────────────
 const getLegacyWalletOptions = () => {
@@ -75,7 +75,19 @@ export default function App() {
   const [transferStatus, setTransferStatus] = useState(1);
   const [transferLoc, setTransferLoc] = useState("");
 
+  const [retTransferId, setRetTransferId] = useState("");
+  const [retTransferTo, setRetTransferTo] = useState("");
+  const [retTransferStatus, setRetTransferStatus] = useState(1);
+  const [retTransferLoc, setRetTransferLoc] = useState("");
+
   const [verifyId, setVerifyId] = useState("");
+  const [recallId, setRecallId] = useState("");
+  const [recallReason, setRecallReason] = useState("");
+  const [lostId, setLostId] = useState("");
+  const [lostReason, setLostReason] = useState("");
+  const [isOwner, setIsOwner] = useState(false);
+  const [passAuth, setPassAuth] = useState(false);
+  const [passKey, setPassKey] = useState("");
   const [batchInfo, setBatchInfo] = useState(null);
   const [batchHistory, setBatchHistory] = useState([]);
 
@@ -267,6 +279,33 @@ export default function App() {
     }
   };
 
+  const connectHardhatDemo = async (roleIndex) => {
+    try {
+      const provider = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
+      const accounts = await provider.listAccounts();
+      if (!accounts[roleIndex]) throw new Error("Account missing.");
+      
+      const signer = await provider.getSigner(accounts[roleIndex].address);
+      const addr = await signer.getAddress();
+      
+      setWalletName("Hardhat Demo");
+      setProvider(provider);
+      setAccount(addr);
+      
+      const pContract = new ethers.Contract(contractAddress, contractABI, signer);
+      setContract(pContract);
+      
+      try {
+        const r = await pContract.getMyRole();
+        setRole(Number(r));
+      } catch {
+        console.log("No role assigned");
+      }
+      setView("industry");
+      setPassAuth(true);
+    } catch (e) { console.error(e); alert("Failed Hardhat Demo. Is it running?"); }
+  };
+
   const signOut = async () => {
 
     if (typeof window !== "undefined") {
@@ -316,12 +355,11 @@ export default function App() {
     e.preventDefault();
     if (!contract) return;
     try {
-      const tx = await contract.createBatch(batchName, expiry, location);
+      const newId = "BCH-" + crypto.getRandomValues(new Uint32Array(1))[0].toString(16).toUpperCase().padStart(8, '0');
+      const tx = await contract.createBatch(newId, batchName, expiry, location);
       await tx.wait();
       
-      // Fetch latest batch ID to generate QR
-      const latestCount = await contract.batchCount();
-      setMintedBatchId(latestCount.toString());
+      setMintedBatchId(newId);
       
       setBatchName(""); setExpiry(""); setLocation("");
     } catch (err) {
@@ -334,13 +372,31 @@ export default function App() {
     e.preventDefault();
     if (!contract) return;
     try {
-      const tx = await contract.transferOwnership(transferId, transferTo, transferStatus, transferLoc);
+      const cleanId = transferId.toUpperCase().trim();
+      const tx = await contract.transferOwnership(cleanId, transferTo, transferStatus, transferLoc);
       await tx.wait();
-      alert("Batch Transfer Recorded Immuntably!");
+      alert("Batch Transfer Recorded Immaculately!");
       setTransferId(""); setTransferTo(""); setTransferLoc("");
     } catch (err) {
       console.error(err);
-      alert(err.code === 4001 ? "Transaction cancelled." : "Error transferring batch. Verify you are the current owner.");
+      const reason = err.reason ? err.reason : (err.message ? err.message : "Verify you are the current holder.");
+      alert(err.code === 4001 ? "Transaction cancelled." : "Error transferring batch:\n" + reason);
+    }
+  };
+
+  const transferBatchRet = async (e) => {
+    e.preventDefault();
+    if (!contract) return;
+    try {
+      const cleanId = retTransferId.toUpperCase().trim();
+      const tx = await contract.transferOwnership(cleanId, retTransferTo, retTransferStatus, retTransferLoc);
+      await tx.wait();
+      alert("Batch Transfer Recorded Immaculately!");
+      setRetTransferId(""); setRetTransferTo(""); setRetTransferLoc("");
+    } catch (err) {
+      console.error(err);
+      const reason = err.reason ? err.reason : (err.message ? err.message : "Verify you are the current holder.");
+      alert(err.code === 4001 ? "Transaction cancelled." : "Error transferring batch:\n" + reason);
     }
   };
 
@@ -369,7 +425,7 @@ export default function App() {
 
   const verifyBatch = async (e) => {
     e.preventDefault();
-    verifyBatchId(verifyId);
+    verifyBatchId(verifyId.toUpperCase().trim());
   };
 
   // QR Scan Callback
@@ -387,6 +443,15 @@ export default function App() {
     } else if (scanTarget === "transfer") {
       setTransferId(scannedId);
       setShowScanner(false);
+    }
+  };
+
+  const handleAuth = (e) => {
+    e.preventDefault();
+    if (passKey === "industry123") {
+      setPassAuth(true);
+    } else {
+      alert("Invalid organization access key.");
     }
   };
 
@@ -564,7 +629,29 @@ export default function App() {
         {/* === INDUSTRY VIEW === */}
         {view === "industry" && (
           <>
-            {!account ? (
+            {!passAuth ? (
+              <div className="flex flex-col items-center justify-center min-h-[50vh]">
+                <form onSubmit={handleAuth} className="bg-white p-10 rounded-3xl shadow-xl w-full max-w-sm border border-slate-100 text-center relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500 opacity-5 blur-[50px] rounded-full"></div>
+                  <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-6 relative z-10">
+                    <ShieldCheck className="w-8 h-8" />
+                  </div>
+                  <h2 className="text-2xl font-bold text-slate-800 mb-2 relative z-10">Industry Portal</h2>
+                  <p className="text-sm text-slate-500 mb-8 relative z-10">Password: industry123</p>
+                  
+                  <input
+                    type="password"
+                    value={passKey}
+                    onChange={(e) => setPassKey(e.target.value)}
+                    placeholder="Enter access key..."
+                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all mb-4 text-center tracking-widest text-lg relative z-10"
+                  />
+                  <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl transition-colors shadow-lg shadow-blue-500/30 relative z-10">
+                    Authenticate
+                  </button>
+                </form>
+              </div>
+            ) : !account ? (
               <div className="flex flex-col items-center justify-center min-h-[40vh] bg-white border border-slate-200 rounded-3xl p-10 text-center shadow-lg">
                 <Wallet className="w-16 h-16 text-slate-300 mb-6" />
                 <h2 className="text-2xl font-bold text-slate-800 mb-2">Connect Your Web3 Wallet</h2>
@@ -602,25 +689,32 @@ export default function App() {
             ) : (
               <>
                 {/* Role Status Bar */}
-                <div className="bg-gradient-to-r from-blue-900 to-indigo-900 rounded-2xl p-8 flex flex-col md:flex-row justify-between items-center text-white shadow-xl">
-                  <div className="flex items-center gap-4 mb-4 md:mb-0">
-                    <div className="bg-white/10 p-4 rounded-full">
-                      <User className="w-8 h-8 text-blue-200" />
+                <div className="bg-gradient-to-r from-blue-900 to-indigo-900 rounded-2xl p-8 flex flex-col md:flex-row justify-between items-center text-white shadow-xl relative overflow-hidden">
+                  <div className="flex items-center gap-4 mb-4 md:mb-0 relative z-10 w-full md:w-1/3">
+                    <div className="bg-white/10 p-4 rounded-full shrink-0">
+                      <ShieldCheck className="w-8 h-8 text-blue-200" />
                     </div>
                     <div>
-                      <p className="text-blue-200 text-sm font-semibold uppercase tracking-wider">Assigned Role</p>
-                      <h2 className="text-3xl font-bold">{ROLES[role]}</h2>
+                      <h2 className="text-2xl font-bold text-white tracking-wide">Industry Workspace</h2>
                     </div>
                   </div>
-                  <div className="bg-slate-900/40 border border-white/10 rounded-xl px-5 py-3 text-sm font-mono text-blue-100 flex items-center gap-2 break-all bg-opacity-50">
-                    <Wallet className="w-4 h-4 text-blue-300"/> {account}
+                  
+                  <div className="flex flex-col lg:flex-row items-center gap-4 relative z-10 w-full lg:w-auto lg:justify-end">
+                    {walletName === "Hardhat Demo" && (
+                      <div className="flex bg-slate-900/60 rounded-xl p-1.5 border border-white/10 shadow-inner w-full sm:w-auto justify-center">
+                        <button onClick={() => connectHardhatDemo(0)} className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition flex items-center justify-center min-w-[4rem] ${role===1?'bg-blue-600 text-white shadow-md':'text-slate-400 hover:text-white'}`}>MFR</button>
+                        <button onClick={() => connectHardhatDemo(1)} className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition flex items-center justify-center min-w-[4rem] ${role===2?'bg-amber-500 text-white shadow-md':'text-slate-400 hover:text-white'}`}>DST</button>
+                        <button onClick={() => connectHardhatDemo(2)} className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition flex items-center justify-center min-w-[4rem] ${role===3?'bg-emerald-500 text-white shadow-md':'text-slate-400 hover:text-white'}`}>RTL</button>
+                      </div>
+                    )}
+                    
+                    <div className="bg-slate-900/50 border border-white/10 rounded-xl px-5 py-3 text-sm font-mono text-blue-200 flex items-center gap-2 justify-center w-full sm:w-auto shrink-0 shadow-inner">
+                      <Wallet className="w-4 h-4 text-blue-400 shrink-0"/> {account.slice(0,6)}...{account.slice(-4)}
+                    </div>
+                    <button onClick={signOut} className="w-full sm:w-auto bg-white/10 hover:bg-white/20 border border-white/20 text-white py-2.5 px-6 rounded-xl font-medium transition flex items-center justify-center gap-2 shrink-0">
+                      Sign Out
+                    </button>
                   </div>
-                  <button
-                    onClick={signOut}
-                    className="mt-4 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white transition-all hover:bg-white/20 md:mt-0"
-                  >
-                    Sign Out From {walletName}
-                  </button>
                 </div>
 
                 {role === 0 && (
@@ -648,9 +742,8 @@ export default function App() {
                   </div>
                 )}
 
-                <div className="grid md:grid-cols-2 gap-8">
+                <div className="grid md:grid-cols-3 gap-8">
                    {/* Manufacturer Panel */}
-                   {(role === 1) && (
                     <div className="bg-white rounded-3xl shadow-xl shadow-slate-200/50 p-8 border border-slate-100 relative">
                       <div className="flex items-center gap-3 mb-6">
                         <div className="p-3 bg-blue-100 text-blue-600 rounded-xl">
@@ -678,26 +771,21 @@ export default function App() {
                         </button>
                       </form>
                     </div>
-                  )}
 
-                  {/* Transfer Panel */}
-                  {(role === 1 || role === 2 || role === 3) && (
+                  {/* Transfer to Distributor Panel */}
                     <div className="bg-white rounded-3xl shadow-xl shadow-slate-200/50 p-8 border border-slate-100 relative">
                       <div className="flex items-center gap-3 mb-6">
                         <div className="p-3 bg-purple-100 text-purple-600 rounded-xl">
                           <ArrowRight className="w-6 h-6" />
                         </div>
-                        <h3 className="text-xl font-bold">Transfer Ownership</h3>
+                        <h3 className="text-xl font-bold">Transfer to Distributor</h3>
                       </div>
                       <form onSubmit={transferBatch} className="space-y-4">
                         <div className="grid grid-cols-2 gap-4">
                           <div>
                             <label className="block text-sm font-medium text-slate-600 mb-1">Batch ID</label>
                             <div className="flex gap-2">
-                              <input required type="number" value={transferId} onChange={e=>setTransferId(e.target.value)} className="flex-1 w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-purple-500 outline-none transition" placeholder="ID" />
-                              <button type="button" onClick={() => { setScanTarget("transfer"); setShowScanner(true); }} className="bg-purple-100 hover:bg-purple-200 text-purple-600 p-3 rounded-xl transition-colors">
-                                <QrCode className="w-5 h-5" />
-                              </button>
+                              <input required type="text" value={transferId} onChange={e=>setTransferId(e.target.value.toUpperCase().trim())} className="flex-1 w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-purple-500 outline-none transition" placeholder="e.g. BCH-XYZ" />
                             </div>
                           </div>
                           <div>
@@ -710,16 +798,214 @@ export default function App() {
                         </div>
                         <div>
                           <label className="block text-sm font-medium text-slate-600 mb-1">Receiver Address</label>
-                          <input required value={transferTo} onChange={e=>setTransferTo(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-purple-500 outline-none transition" placeholder="0x..." />
+                          <div className="flex flex-col xl:flex-row gap-2">
+                            <input required value={transferTo} onChange={e=>setTransferTo(e.target.value)} className="flex-1 px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-purple-500 outline-none transition w-full" placeholder="0x..." />
+                            <select onChange={e => {if(e.target.value) setTransferTo(e.target.value)}} className="w-full xl:w-auto px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-purple-500 outline-none bg-white text-sm text-slate-600">
+                              <option value="">Auto-fill Demo...</option>
+                              {role === 1 && <option value="0x70997970C51812dc3A010C7d01b50e0d17dc79C8">Account #1 (Distributor)</option>}
+                            </select>
+                          </div>
                         </div>
                         <div>
                           <label className="block text-sm font-medium text-slate-600 mb-1">Current Location</label>
                           <input required value={transferLoc} onChange={e=>setTransferLoc(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-purple-500 outline-none transition" placeholder="Facility Name, City" />
                         </div>
+                        <div className="text-[10px] text-purple-600/70 font-bold uppercase text-center mt-2 tracking-widest">Requires Manufacturer Wallet</div>
                         <button type="submit" className="w-full bg-purple-600 hover:bg-purple-700 text-white font-medium py-3 rounded-xl transition-colors mt-2 shadow-lg shadow-purple-600/20">
-                          Execute Transfer
+                          Transfer
                         </button>
                       </form>
+                    </div>
+
+                  {/* Transfer to Retailer Panel */}
+                    <div className="bg-white rounded-3xl shadow-xl shadow-slate-200/50 p-8 border border-slate-100 relative">
+                      <div className="flex items-center gap-3 mb-6">
+                        <div className="p-3 bg-emerald-100 text-emerald-600 rounded-xl">
+                          <ArrowRight className="w-6 h-6" />
+                        </div>
+                        <h3 className="text-xl font-bold">Transfer to Retailer</h3>
+                      </div>
+                      <form onSubmit={transferBatchRet} className="space-y-4">
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium text-slate-600 mb-1">Batch ID</label>
+                            <div className="flex gap-2">
+                              <input required type="text" value={retTransferId} onChange={e=>setRetTransferId(e.target.value.toUpperCase().trim())} className="flex-1 w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none transition" placeholder="e.g. BCH-XYZ" />
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-slate-600 mb-1">Status</label>
+                            <select value={retTransferStatus} onChange={e=>setRetTransferStatus(Number(e.target.value))} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none bg-white">
+                              <option value={1}>In Transit</option>
+                               <option value={2}>Delivered</option>
+                            </select>
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-slate-600 mb-1">Receiver Address</label>
+                          <div className="flex flex-col xl:flex-row gap-2">
+                            <input required value={retTransferTo} onChange={e=>setRetTransferTo(e.target.value)} className="flex-1 px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none transition w-full" placeholder="0x..." />
+                            <select onChange={e => {if(e.target.value) setRetTransferTo(e.target.value)}} className="w-full xl:w-auto px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none bg-white text-sm text-slate-600">
+                              <option value="">Auto-fill Demo...</option>
+                              <option value="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC">Account #2 (Retailer)</option>
+                            </select>
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-slate-600 mb-1">Current Location</label>
+                          <input required value={retTransferLoc} onChange={e=>setRetTransferLoc(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none transition" placeholder="Facility Name, City" />
+                        </div>
+                        <div className="text-[10px] text-emerald-600/70 font-bold uppercase text-center mt-2 tracking-widest">Requires Distributor Wallet</div>
+                        <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-3 rounded-xl transition-colors mt-2 shadow-lg shadow-emerald-600/20">
+                          Transfer
+                        </button>
+                      </form>
+                    </div>
+
+                </div>
+
+                {/* --- Operational Controls --- */}
+                <div className="mt-8 bg-white rounded-3xl p-8 border border-slate-100 shadow-xl shadow-slate-200/50">
+                  <h3 className="text-xl font-bold flex items-center gap-2 mb-6 text-slate-800">
+                    <ShieldCheck className="w-6 h-6 text-red-500" /> Security & Exception Handling
+                  </h3>
+                  <div className="grid md:grid-cols-2 gap-8">
+                    {/* Recall Panel */}
+                    <div className="bg-red-50/50 border border-red-100 rounded-2xl p-6">
+                      <h4 className="font-bold text-red-700 mb-4 flex items-center gap-2">
+                        <AlertTriangle className="w-5 h-5" /> Recall Sold Batch
+                      </h4>
+                      <form onSubmit={async (e) => {
+                        e.preventDefault();
+                        if(!contract) return;
+                        try {
+                          const tx = await contract.recallBatch(recallId.toUpperCase().trim(), recallReason);
+                          await tx.wait();
+                          alert("Batch Recalled successfully.");
+                        } catch (err) { alert("Error recalling batch. Make sure you are the Origin Manufacturer."); console.error(err); }
+                      }} className="space-y-4">
+                        <input required type="text" placeholder="Batch ID" className="w-full px-4 py-3 rounded-xl border border-red-200 focus:ring-2 focus:ring-red-500 outline-none bg-white" onChange={e=>setRecallId(e.target.value)} />
+                        <input required type="text" placeholder="Reason for Recall" className="w-full px-4 py-3 rounded-xl border border-red-200 focus:ring-2 focus:ring-red-500 outline-none bg-white" onChange={e=>setRecallReason(e.target.value)} />
+                        <button className="w-full bg-red-600 hover:bg-red-700 text-white font-medium py-3 rounded-xl transition-colors">Initiate Full Recall</button>
+                      </form>
+                    </div>
+
+                    {/* Report Lost/Destroyed Panel */}
+                    <div className="bg-orange-50/50 border border-orange-100 rounded-2xl p-6">
+                        <h4 className="font-bold text-orange-700 mb-4 flex items-center gap-2">
+                          <ShieldAlert className="w-5 h-5" /> Report Damage / Lost
+                        </h4>
+                        <form onSubmit={async (e) => {
+                          e.preventDefault();
+                          if(!contract) return;
+                          try {
+                            const tx = await contract.reportLost(lostId.toUpperCase().trim(), lostReason);
+                            await tx.wait();
+                            alert("Batch status permanently updated to Lost/Destroyed.");
+                          } catch (err) { alert("Error reporting batch. Must be Current Holder."); console.error(err); }
+                        }} className="space-y-4">
+                          <input required type="text" placeholder="Batch ID" className="w-full px-4 py-3 rounded-xl border border-orange-200 focus:ring-2 focus:ring-orange-500 outline-none bg-white" onChange={e=>setLostId(e.target.value)} />
+                          <input required type="text" placeholder="Reason (e.g. Temperature breach)" className="w-full px-4 py-3 rounded-xl border border-orange-200 focus:ring-2 focus:ring-orange-500 outline-none bg-white" onChange={e=>setLostReason(e.target.value)} />
+                          <button className="w-full bg-orange-600 hover:bg-orange-700 text-white font-medium py-3 rounded-xl transition-colors">Confirm Incident Details</button>
+                        </form>
+                    </div>
+                  </div>
+                </div>
+
+                {/* --- Batch Audit / Verification --- */}
+                <div className="mt-8 bg-slate-900 rounded-3xl p-8 border border-slate-800 shadow-2xl overflow-hidden relative">
+                  <div className="absolute top-0 left-0 w-64 h-64 bg-cyan-500 opacity-5 blur-[100px] rounded-full"></div>
+                  <h3 className="text-xl font-bold flex items-center gap-2 mb-6 text-white relative z-10">
+                    <Search className="w-6 h-6 text-cyan-400" /> Internal Batch Audit
+                  </h3>
+                  <form onSubmit={verifyBatch} className="flex gap-4 mb-8 relative z-10">
+                    <input required type="text" value={verifyId} onChange={e=>setVerifyId(e.target.value.toUpperCase().trim())} className="flex-1 px-4 py-3 rounded-xl border border-slate-700 bg-slate-800/80 text-white placeholder-slate-500 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 outline-none transition-all" placeholder="Enter Batch ID (e.g. BCH-XYZ) to audit timeline..." />
+                    <button type="submit" className="bg-cyan-600 hover:bg-cyan-500 text-white font-bold px-8 py-3 rounded-xl transition-all shadow-lg shadow-cyan-600/30">Audit Tracker</button>
+                  </form>
+                  
+                  {batchInfo && (
+                    <div className="border-t border-slate-700 pt-8 mt-8 relative z-10">
+                      <div className="flex flex-col lg:flex-row gap-8 justify-between items-start mb-10">
+                        <div className="flex-1">
+                          <p className="text-slate-400 text-sm font-semibold uppercase tracking-wider mb-2">Internal Record</p>
+                          <h4 className="text-4xl font-bold text-white mb-4">{batchInfo.medicineName}</h4>
+                          <div className="flex flex-wrap items-center gap-3">
+                            <div className="flex items-center gap-2 text-cyan-400 font-medium bg-cyan-400/10 border border-cyan-400/20 px-4 py-1.5 rounded-full text-sm">
+                              <CheckCircle2 className="w-4 h-4" /> Validated Entry
+                            </div>
+                            <div className="flex items-center gap-2 text-slate-300 font-medium bg-slate-700 border border-slate-600 px-4 py-1.5 rounded-full text-sm">
+                              ID: #{batchInfo.batchId.toString()}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="lg:w-[400px] grid grid-cols-2 gap-x-6 gap-y-6 bg-slate-950/50 p-6 rounded-2xl border border-slate-800">
+                          <div>
+                            <span className="block text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Status</span>
+                            <span className="text-white font-medium text-lg">{STATUS[Number(batchInfo.status)]}</span>
+                          </div>
+                          <div>
+                            <span className="block text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Expiry Date</span>
+                            <span className="text-white font-medium text-lg">{batchInfo.expiryDate}</span>
+                          </div>
+                          <div className="col-span-2">
+                            <span className="block text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Current Owner Address</span>
+                            <span className="text-emerald-400 font-mono text-sm break-all">{batchInfo.currentOwner}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {batchHistory.length > 0 && (
+                        <div className="pt-2">
+                          <h5 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
+                            Immutable Timeline
+                          </h5>
+                          <div className="flex overflow-x-auto pb-8 pt-4 px-4 snap-x snap-mandatory gap-8 items-center justify-start scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent bg-slate-900/50 rounded-2xl border border-slate-800">
+                            {batchHistory.map((event, idx) => {
+                              let roleLabel = "System";
+                              let roleColor = "text-slate-400";
+                              const addr = event.to.toLowerCase();
+                              if (addr === "0x70997970c51812dc3a010c7d01b50e0d17dc79c8") { roleLabel = "Distributor"; roleColor="text-amber-400"; }
+                              else if (addr === "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc") { roleLabel = "Retailer"; roleColor="text-emerald-400"; }
+                              else if (idx === 0) { roleLabel = "Manufacturer"; roleColor="text-blue-400"; }
+
+                              return (
+                              <div key={idx} className="relative flex flex-col items-center flex-shrink-0 w-80 snap-center group">
+                                {idx !== batchHistory.length - 1 && (
+                                  <div className="absolute top-6 left-[50%] w-full h-1 bg-gradient-to-r from-blue-500 to-slate-700 -z-10" />
+                                )}
+                                
+                                <div className="flex items-center justify-center w-14 h-14 rounded-full border-4 border-slate-800 bg-blue-600 text-white shadow-[0_0_20px_rgba(37,99,235,0.6)] z-10 hover:scale-110 transition-transform">
+                                  {idx === 0 ? <Settings className="w-6 h-6"/> : <ArrowRight className="w-6 h-6"/>}
+                                </div>
+                                
+                                <div className="mt-8 bg-slate-800 border border-slate-700 p-6 rounded-2xl shadow-xl hover:-translate-y-2 transition-transform w-full relative">
+                                  <div className="absolute -top-3 left-[50%] -translate-x-[50%] w-6 h-6 bg-slate-800 border-t border-l border-slate-700 rotate-45 transform"></div>
+                                  
+                                  <div className="flex justify-between items-start mb-4 relative z-10">
+                                    <span className="text-blue-400 font-bold text-lg">{STATUS[Number(event.status)]}</span>
+                                    <span className="text-slate-400 text-xs font-medium bg-slate-900 px-3 py-1 rounded-full whitespace-nowrap">{new Date(Number(event.timestamp) * 1000).toLocaleString()}</span>
+                                  </div>
+                                  
+                                  <p className="text-slate-300 mb-4 flex items-center gap-2 relative z-10">
+                                    <span className="text-slate-500 text-sm">Location:</span> {event.location}
+                                  </p>
+                                  
+                                  <div className="bg-slate-900/50 p-3 rounded-xl border border-slate-700 relative z-10">
+                                    <div className="flex justify-between items-center mb-1">
+                                      <span className="text-slate-500 text-xs uppercase tracking-wider font-semibold">Holder:</span>
+                                      <span className={`text-xs font-bold uppercase ${roleColor}`}>{roleLabel}</span>
+                                    </div>
+                                    <p className="text-emerald-400/90 text-xs font-mono break-all leading-relaxed">
+                                      {event.to}
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                            )})}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -739,7 +1025,7 @@ export default function App() {
               </div>
               
               <form onSubmit={verifyBatch} className="flex flex-col sm:flex-row gap-4 max-w-lg relative z-10">
-                <input required type="number" value={verifyId} onChange={e=>setVerifyId(e.target.value)} className="flex-1 px-6 py-4 rounded-xl border border-slate-700 bg-slate-800/80 text-white placeholder-slate-500 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-lg transition-all" placeholder="Enter Batch ID (e.g. 1)" />
+                <input required type="text" value={verifyId} onChange={e=>setVerifyId(e.target.value.toUpperCase().trim())} className="flex-1 px-6 py-4 rounded-xl border border-slate-700 bg-slate-800/80 text-white placeholder-slate-500 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-lg transition-all" placeholder="Enter Batch ID (e.g. BCH-XYZ)" />
                 <button type="submit" className="bg-blue-600 hover:bg-blue-500 text-white px-8 font-bold text-lg rounded-xl transition-all hover:shadow-[0_0_20px_rgba(37,99,235,0.4)]">
                   Verify
                 </button>
@@ -786,28 +1072,49 @@ export default function App() {
                     <h5 className="text-2xl font-bold text-white mb-8 flex items-center gap-2">
                       <ArrowRight className="text-blue-500" /> Transparent Chain of Custody
                     </h5>
-                    <div className="space-y-6 relative before:absolute before:inset-0 before:ml-[1.4rem] before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-600 before:to-transparent">
-                      {batchHistory.map((event, idx) => (
-                        <div key={idx} className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active">
-                          <div className="flex items-center justify-center w-12 h-12 rounded-full border-4 border-slate-800 bg-blue-500 text-slate-100 shadow-[0_0_15px_rgba(59,130,246,0.5)] shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 relative z-10">
-                            {idx === 0 ? <Settings className="w-5 h-5"/> : <ArrowRight className="w-5 h-5"/>}
+                    <div className="flex overflow-x-auto pb-8 pt-4 px-4 snap-x snap-mandatory gap-8 items-center justify-start scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
+                      {batchHistory.map((event, idx) => {
+                        let roleLabel = "System";
+                        let roleColor = "text-slate-400";
+                        const addr = event.to.toLowerCase();
+                        if (addr === "0x70997970c51812dc3a010c7d01b50e0d17dc79c8") { roleLabel = "Distributor"; roleColor="text-amber-400"; }
+                        else if (addr === "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc") { roleLabel = "Retailer"; roleColor="text-emerald-400"; }
+                        else if (idx === 0) { roleLabel = "Manufacturer"; roleColor="text-blue-400"; }
+
+                        return (
+                        <div key={idx} className="relative flex flex-col items-center flex-shrink-0 w-80 snap-center group">
+                          {idx !== batchHistory.length - 1 && (
+                            <div className="absolute top-6 left-[50%] w-full h-1 bg-gradient-to-r from-blue-500 to-slate-700 -z-10" />
+                          )}
+                          
+                          <div className="flex items-center justify-center w-14 h-14 rounded-full border-4 border-slate-800 bg-blue-600 text-white shadow-[0_0_20px_rgba(37,99,235,0.6)] z-10 hover:scale-110 transition-transform">
+                            {idx === 0 ? <Settings className="w-6 h-6"/> : <ArrowRight className="w-6 h-6"/>}
                           </div>
                           
-                          <div className="w-[calc(100%-4rem)] md:w-[calc(50%-3rem)] bg-slate-800 border border-slate-700 p-6 rounded-2xl shadow-xl transition-transform hover:-translate-y-1">
-                            <div className="flex justify-between items-start mb-3">
+                          <div className="mt-8 bg-slate-800 border border-slate-700 p-6 rounded-2xl shadow-xl hover:-translate-y-2 transition-transform w-full relative">
+                            <div className="absolute -top-3 left-[50%] -translate-x-[50%] w-6 h-6 bg-slate-800 border-t border-l border-slate-700 rotate-45 transform"></div>
+                            
+                            <div className="flex justify-between items-start mb-4 relative z-10">
                               <span className="text-blue-400 font-bold text-lg">{STATUS[Number(event.status)]}</span>
-                              <span className="text-slate-400 text-sm font-medium bg-slate-900 px-3 py-1 rounded-full">{new Date(Number(event.timestamp) * 1000).toLocaleString()}</span>
+                              <span className="text-slate-400 text-xs font-medium bg-slate-900 px-3 py-1 rounded-full whitespace-nowrap">{new Date(Number(event.timestamp) * 1000).toLocaleString()}</span>
                             </div>
-                            <p className="text-slate-300 mb-2 flex items-center gap-2">
+                            
+                            <p className="text-slate-300 mb-4 flex items-center gap-2 relative z-10">
                               <span className="text-slate-500 text-sm">Location:</span> {event.location}
                             </p>
-                            <p className="text-emerald-400/80 text-xs font-mono break-all bg-emerald-400/10 p-2 rounded-lg border border-emerald-400/20">
-                              <span className="text-slate-500 mb-1 block font-sans font-semibold">Holder Address:</span>
-                              {event.to}
-                            </p>
+                            
+                            <div className="bg-slate-900/50 p-3 rounded-xl border border-slate-700 relative z-10">
+                              <div className="flex justify-between items-center mb-1">
+                                <span className="text-slate-500 text-xs uppercase tracking-wider font-semibold">Holder:</span>
+                                <span className={`text-xs font-bold uppercase ${roleColor}`}>{roleLabel}</span>
+                              </div>
+                              <p className="text-emerald-400/90 text-xs font-mono break-all leading-relaxed">
+                                {event.to}
+                              </p>
+                            </div>
                           </div>
                         </div>
-                      ))}
+                      )})}
                     </div>
                   </div>
                 )}

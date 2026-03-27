@@ -1,5 +1,5 @@
 {
-  "contractAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+  "contractAddress": "0xBEc49fA140aCaA83533fB00A2BB19bDdd0290f25",
   "abi": [
     {
       "inputs": [],
@@ -10,10 +10,10 @@
       "anonymous": false,
       "inputs": [
         {
-          "indexed": true,
-          "internalType": "uint256",
+          "indexed": false,
+          "internalType": "string",
           "name": "batchId",
-          "type": "uint256"
+          "type": "string"
         },
         {
           "indexed": false,
@@ -35,10 +35,104 @@
       "anonymous": false,
       "inputs": [
         {
-          "indexed": true,
-          "internalType": "uint256",
+          "indexed": false,
+          "internalType": "string",
           "name": "batchId",
-          "type": "uint256"
+          "type": "string"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "reportedBy",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "reason",
+          "type": "string"
+        }
+      ],
+      "name": "BatchLost",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "batchId",
+          "type": "string"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "recalledBy",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "reason",
+          "type": "string"
+        }
+      ],
+      "name": "BatchRecalled",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "batchId",
+          "type": "string"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "rejectedBy",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "reason",
+          "type": "string"
+        }
+      ],
+      "name": "BatchRejected",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "batchId",
+          "type": "string"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "soldBy",
+          "type": "address"
+        }
+      ],
+      "name": "BatchSold",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "batchId",
+          "type": "string"
         },
         {
           "indexed": true,
@@ -60,6 +154,31 @@
         }
       ],
       "name": "BatchTransferred",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "batchId",
+          "type": "string"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "scanCount",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "address",
+          "name": "scanner",
+          "type": "address"
+        }
+      ],
+      "name": "FraudAlert",
       "type": "event"
     },
     {
@@ -97,9 +216,9 @@
     {
       "inputs": [
         {
-          "internalType": "uint256",
+          "internalType": "string",
           "name": "",
-          "type": "uint256"
+          "type": "string"
         },
         {
           "internalType": "uint256",
@@ -133,6 +252,11 @@
           "internalType": "string",
           "name": "location",
           "type": "string"
+        },
+        {
+          "internalType": "string",
+          "name": "notes",
+          "type": "string"
         }
       ],
       "stateMutability": "view",
@@ -141,17 +265,17 @@
     {
       "inputs": [
         {
-          "internalType": "uint256",
+          "internalType": "string",
           "name": "",
-          "type": "uint256"
+          "type": "string"
         }
       ],
       "name": "batches",
       "outputs": [
         {
-          "internalType": "uint256",
+          "internalType": "string",
           "name": "batchId",
-          "type": "uint256"
+          "type": "string"
         },
         {
           "internalType": "string",
@@ -201,6 +325,11 @@
       "inputs": [
         {
           "internalType": "string",
+          "name": "_batchId",
+          "type": "string"
+        },
+        {
+          "internalType": "string",
           "name": "_medicineName",
           "type": "string"
         },
@@ -223,9 +352,9 @@
     {
       "inputs": [
         {
-          "internalType": "uint256",
+          "internalType": "string",
           "name": "_batchId",
-          "type": "uint256"
+          "type": "string"
         }
       ],
       "name": "getBatch",
@@ -233,9 +362,9 @@
         {
           "components": [
             {
-              "internalType": "uint256",
+              "internalType": "string",
               "name": "batchId",
-              "type": "uint256"
+              "type": "string"
             },
             {
               "internalType": "string",
@@ -289,9 +418,9 @@
     {
       "inputs": [
         {
-          "internalType": "uint256",
+          "internalType": "string",
           "name": "_batchId",
-          "type": "uint256"
+          "type": "string"
         }
       ],
       "name": "getBatchHistory",
@@ -322,6 +451,11 @@
               "internalType": "string",
               "name": "location",
               "type": "string"
+            },
+            {
+              "internalType": "string",
+              "name": "notes",
+              "type": "string"
             }
           ],
           "internalType": "struct PharmaTracking.HistoryItem[]",
@@ -346,6 +480,37 @@
       "type": "function"
     },
     {
+      "inputs": [],
+      "name": "owner",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "_batchId",
+          "type": "string"
+        },
+        {
+          "internalType": "string",
+          "name": "_reason",
+          "type": "string"
+        }
+      ],
+      "name": "recallBatch",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
       "inputs": [
         {
           "internalType": "address",
@@ -366,9 +531,27 @@
     {
       "inputs": [
         {
-          "internalType": "uint256",
+          "internalType": "string",
           "name": "_batchId",
-          "type": "uint256"
+          "type": "string"
+        },
+        {
+          "internalType": "string",
+          "name": "_reason",
+          "type": "string"
+        }
+      ],
+      "name": "reportLost",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "_batchId",
+          "type": "string"
         },
         {
           "internalType": "address",
